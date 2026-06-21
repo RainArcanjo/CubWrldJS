@@ -110,8 +110,8 @@ function useThreeScene(containerRef) {
 
     async function loadClouds() {
       try {
-        const c1Res = await fetch('/sprites/cloud01.cub');
-        const c2Res = await fetch('/sprites/cloud02.cub');
+        const c1Res = await fetch(import.meta.env.BASE_URL + 'sprites/cloud01.cub');
+        const c2Res = await fetch(import.meta.env.BASE_URL + 'sprites/cloud02.cub');
         const c1Buf = await c1Res.arrayBuffer();
         const c2Buf = await c2Res.arrayBuffer();
         
@@ -119,7 +119,7 @@ function useThreeScene(containerRef) {
         const g2 = buildItemGeometry(parseCub(c2Buf)).geometry;
 
         try {
-          const leavesRes = await fetch('/sprites/tree-leaves.cub');
+          const leavesRes = await fetch(import.meta.env.BASE_URL + 'sprites/tree-leaves.cub');
           if (leavesRes.ok) {
             const leavesBuf = await leavesRes.arrayBuffer();
             WorldGenerator.setLeafTemplate(parseCub(leavesBuf));
@@ -417,7 +417,7 @@ export default function WorldViewer({ onBack, charConfig }) {
 
   useEffect(() => {
     // Attempt to load a simple bush or tree to decorate the world
-    fetch('/sprites/wood-tree-random1.cub')
+    fetch(import.meta.env.BASE_URL + 'sprites/wood-tree-random1.cub')
       .then(res => {
         if (!res.ok) throw new Error();
         return res.arrayBuffer();

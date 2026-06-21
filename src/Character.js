@@ -3,7 +3,7 @@ import { parseCub, buildMeshGeometry } from './CubViewer';
 import { createStylizedMaterial } from './Shaders';
 
 async function loadPart(url, colorHex = null, overrideColor = null, skinColorHex = null) {
-  const res = await fetch(url);
+  const res = await fetch(import.meta.env.BASE_URL + url.replace(/^\//, ''));
   if (!res.ok) throw new Error(`Cannot load ${url}: ${res.status}`);
   const buf = await res.arrayBuffer();
   const parsed = parseCub(buf);
