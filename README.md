@@ -1,6 +1,6 @@
 # CubWrdThreeJs
 
-CubWrdThreeJs is an open-source web-based parser and rendering engine for Cube World Alpha (.cub) voxel models, built with React and Three.js. It features a fully functional Character Creator replicating the original game's appearance system, a World Generator for rendering procedurally generated voxel terrains, and a standalone `.cub` file viewer.
+CubWrdThreeJs is an open-source web-based parser and rendering engine for Cube World Steam Version (.cub) voxel models, built with React and Three.js. It features a fully functional Character Creator replicating the original game's appearance system, a World Generator for rendering procedurally generated voxel terrains, and a standalone `.cub` file viewer.
 
 # CubWrdThreeJs
 
