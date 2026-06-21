@@ -28,7 +28,13 @@ export const LightingGUI = {
       fogColor: '#' + globalLightingUniforms.uFogColor.value.getHexString(),
       fogDensity: globalLightingUniforms.uFogDensity.value,
       fogFalloff: globalLightingUniforms.uFogHeightFalloff.value,
-      fogBaseHeight: globalLightingUniforms.uFogBaseHeight.value
+      fogBaseHeight: globalLightingUniforms.uFogBaseHeight.value,
+      
+      // Sky
+      skyTurbidity: globalLightingUniforms.uSkyTurbidity.value,
+      skyRayleigh: globalLightingUniforms.uSkyRayleigh.value,
+      skyMieCoefficient: globalLightingUniforms.uSkyMieCoefficient.value,
+      skyMieDirectionalG: globalLightingUniforms.uSkyMieDirectionalG.value
     };
 
     // --- Toggles ---
@@ -78,6 +84,21 @@ export const LightingGUI = {
     });
     fFog.add(params, 'fogBaseHeight', -100.0, 200.0, 1.0).name('Base Height').onChange(v => {
       globalLightingUniforms.uFogBaseHeight.value = v;
+    });
+
+    // --- Advanced Sky Physics ---
+    const fSky = guiInstance.addFolder('Advanced Sky Physics');
+    fSky.add(params, 'skyTurbidity', 0.0, 20.0, 0.1).name('Turbidity (Dust)').onChange(v => {
+      globalLightingUniforms.uSkyTurbidity.value = v;
+    });
+    fSky.add(params, 'skyRayleigh', 0.0, 4.0, 0.01).name('Rayleigh (Air)').onChange(v => {
+      globalLightingUniforms.uSkyRayleigh.value = v;
+    });
+    fSky.add(params, 'skyMieCoefficient', 0.0, 0.1, 0.001).name('Mie Coeff (Haze)').onChange(v => {
+      globalLightingUniforms.uSkyMieCoefficient.value = v;
+    });
+    fSky.add(params, 'skyMieDirectionalG', 0.0, 1.0, 0.01).name('Mie Dir G').onChange(v => {
+      globalLightingUniforms.uSkyMieDirectionalG.value = v;
     });
 
     guiInstance.open();

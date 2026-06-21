@@ -14,7 +14,13 @@ export const globalLightingUniforms = {
   uFogColor: { value: new THREE.Color(0x7ec8e3) }, // Matches default sky horizon
   uFogDensity: { value: 0.005 },
   uFogHeightFalloff: { value: 0.015 },
-  uFogBaseHeight: { value: 50.0 }
+  uFogBaseHeight: { value: 50.0 },
+  
+  // Sky Physics (THREE.Sky)
+  uSkyTurbidity: { value: 10.0 },
+  uSkyRayleigh: { value: 2.0 },
+  uSkyMieCoefficient: { value: 0.005 },
+  uSkyMieDirectionalG: { value: 0.8 }
 };
 
 export const vertexShader = `

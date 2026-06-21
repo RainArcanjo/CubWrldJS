@@ -8,7 +8,8 @@ import { LightingGUI } from "./LightingGUI";
 import { parseCub, buildMeshGeometry as buildItemGeometry } from "./CubViewer";
 import { CharacterCreator } from "./CharacterCreator";
 import { i18n } from "./i18n";
-import { createStylizedMaterial } from "./Shaders";
+import { createStylizedMaterial, globalLightingUniforms } from "./Shaders";
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
 
 function useThreeScene(containerRef) {
   const stateRef = useRef(null);
@@ -34,59 +35,13 @@ function useThreeScene(containerRef) {
     const scene = new THREE.Scene();
     // Fog is now handled by Height Volumetric Fog inside Shaders.js
 
-    // ─── SKY DOME ─────────────────────────────────────────────────────────────
-    // Values extracted EXACTLY from Cube.exe compiled HLSL shader bytecode (IDA Pro):
-    //   c5  = (-0.6000, 2.5000, 0.6000, 3.0000)
-    //   c9  = ( 0.8000, 0.2000, 0.7500, 0.0000)
-    //
-    //   c5.x = -0.6  → vertical offset (shifts gradient down so horizon is at eye level)
-    //   c5.y =  2.5  → exponent (controls sharpness of the gradient)
-    //   c9.x =  0.8  → sun contribution (also used as frontLight in terrain shader)
-    //   c9.y =  0.2  → ambient term
-    // ─────────────────────────────────────────────────────────────────────────
-    const vertexShader = `
-      varying vec3 vWorldPosition;
-      void main() {
-        vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
-        vWorldPosition = worldPosition.xyz;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-      }
-    `;
-    const fragmentShader = `
-      uniform vec3 topColor;     // skyColor2 — zenith blue
-      uniform vec3 bottomColor;  // skyColor1 — horizon cyan (matches fog)
-      uniform float offset;      // c5.x = -0.6
-      uniform float exponent;    // c5.y =  2.5
-      varying vec3 vWorldPosition;
-      void main() {
-        // Shift vWorldPosition.y by offset so horizon blend starts near eye level
-        float h = normalize( vWorldPosition + vec3(0.0, offset, 0.0) ).y;
-        // Power curve: exact match to game's sky gradient
-        float t = max( pow( max( h, 0.0 ), exponent ), 0.0 );
-        gl_FragColor = vec4( mix( bottomColor, topColor, t ), 1.0 );
-      }
-    `;
-    const uniforms = {
-      // Screenshot analysis: deep royal blue zenith (#1a72c8),
-      // lighter sky-blue horizon (#7ec8e3) blending with fog
-      topColor:    { value: new THREE.Color(0x1a72c8) }, // deep sky blue
-      bottomColor: { value: new THREE.Color(0x7ec8e3) }, // light horizon (matches fog)
-      offset:   { value: -0.6 },  // c5.x from Cube.exe
-      exponent: { value: 2.5  },  // c5.y from Cube.exe
-    };
-
-    const skyGeo = new THREE.SphereGeometry(600, 32, 15);
-    const skyMat = new THREE.ShaderMaterial({
-      uniforms: uniforms,
-      vertexShader: vertexShader,
-      fragmentShader: fragmentShader,
-      side: THREE.BackSide,
-      depthWrite: false,
-    });
-    const sky = new THREE.Mesh(skyGeo, skyMat);
+    // ─── ATMOSPHERIC SCATTERING SKY ───────────────────────────────────────────
+    const sky = new Sky();
+    sky.scale.setScalar(10000);
     scene.add(sky);
 
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 4000);
+    // INCREASE FAR PLANE so 5000-radius sky dome and distant clouds don't get culled!
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 6000);
     camera.position.set(0, 100, 100);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -105,9 +60,52 @@ function useThreeScene(containerRef) {
     const group = new THREE.Group();
     scene.add(group);
 
-    // ─── CLOUDS ───────────────────────────────────────────────────────────────
-    const cloudsGroup = new THREE.Group();
-    scene.add(cloudsGroup);
+    // ─── STARS ─────────────────────────────────────────────────────────────
+    const starsGeo = new THREE.BufferGeometry();
+    const starPos = [];
+    for(let i = 0; i < 3000; i++) {
+      const x = THREE.MathUtils.randFloatSpread(10000); // spread over 10km
+      const y = THREE.MathUtils.randFloat(800, 4800);   // higher in the sky
+      const z = THREE.MathUtils.randFloatSpread(10000);
+      starPos.push(x, y, z);
+    }
+    starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+    const starsMat = new THREE.PointsMaterial({ 
+      color: 0xffffff, 
+      size: 2.5, 
+      sizeAttenuation: false,
+      transparent: true,
+      opacity: 0.4 // make them faint
+    });
+    const stars = new THREE.Points(starsGeo, starsMat);
+    // Don't cull stars if they get outside frustum occasionally
+    stars.frustumCulled = false;
+    scene.add(stars);
+
+    // ─── SUN & MOON ─────────────────────────────────────────────────────────
+    const createFlatTexture = (colorHex) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64; canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = colorHex;
+      ctx.fillRect(0, 0, 64, 64);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.magFilter = THREE.NearestFilter;
+      return tex;
+    };
+
+    const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: createFlatTexture('#fff4d4') }));
+    sunSprite.scale.set(400, 400, 1);
+    scene.add(sunSprite);
+
+    const moonSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: createFlatTexture('#d4e5ff') }));
+    moonSprite.scale.set(250, 250, 1);
+    scene.add(moonSprite);
+
+    // ─── CLOUDS (INSTANCED) ─────────────────────────────────────────────────
+    let cloud1Instanced, cloud2Instanced;
+    const cloudDummy = new THREE.Object3D();
+    const cloudData = []; // Keeps track of positions and types
 
     async function loadClouds() {
       try {
@@ -121,30 +119,49 @@ function useThreeScene(containerRef) {
         
         const mat = createStylizedMaterial();
         
-        // Grid-based placement with jitter to prevent overlap and clumping
-        const gridSize = 6; // 6x6 grid = 36 clouds
-        const spacing = 800; // Spaced 800 units apart (spread them wide)
+        cloud1Instanced = new THREE.InstancedMesh(g1, mat, 36);
+        cloud2Instanced = new THREE.InstancedMesh(g2, mat, 36);
+        
+        // Critical: InstancedMesh doesn't compute bounding sphere across all instances automatically.
+        // It will instantly vanish when the camera turns away from the origin if we don't disable culling!
+        cloud1Instanced.frustumCulled = false;
+        cloud2Instanced.frustumCulled = false;
+        
+        scene.add(cloud1Instanced);
+        scene.add(cloud2Instanced);
+        
+        const gridSize = 6; 
+        const spacing = 800; 
         const startOffset = - (gridSize * spacing) / 2;
 
+        let idx1 = 0; let idx2 = 0;
         for (let ix = 0; ix < gridSize; ix++) {
           for (let iz = 0; iz < gridSize; iz++) {
-            const mesh = new THREE.Mesh(Math.random() > 0.5 ? g1 : g2, mat);
-            mesh.scale.set(18, 18, 18);
+            const isG1 = Math.random() > 0.5;
             
-            // Base grid position + random jitter (-300 to 300)
-            const jitterX = (Math.random() - 0.5) * 600;
-            const jitterZ = (Math.random() - 0.5) * 600;
+            const x = startOffset + ix * spacing + (Math.random() - 0.5) * 600;
+            const y = 250 + Math.random() * 40;
+            const z = startOffset + iz * spacing + (Math.random() - 0.5) * 600;
+            const rotY = Math.floor(Math.random() * 4) * (Math.PI / 2);
             
-            mesh.position.set(
-              startOffset + ix * spacing + jitterX, 
-              250 + Math.random() * 40,     
-              startOffset + iz * spacing + jitterZ  
-            );
+            cloudData.push({ isG1, x, y, z, rotY });
             
-            mesh.rotation.y = Math.floor(Math.random() * 4) * (Math.PI / 2);
-            cloudsGroup.add(mesh);
+            cloudDummy.position.set(x, y, z);
+            cloudDummy.rotation.y = rotY;
+            cloudDummy.scale.set(18, 18, 18);
+            cloudDummy.updateMatrix();
+            
+            if (isG1) {
+              cloud1Instanced.setMatrixAt(idx1++, cloudDummy.matrix);
+            } else {
+              cloud2Instanced.setMatrixAt(idx2++, cloudDummy.matrix);
+            }
           }
         }
+        cloud1Instanced.count = idx1;
+        cloud2Instanced.count = idx2;
+        cloud1Instanced.instanceMatrix.needsUpdate = true;
+        cloud2Instanced.instanceMatrix.needsUpdate = true;
       } catch (err) {
         console.error("Failed to load clouds", err);
       }
@@ -183,6 +200,8 @@ function useThreeScene(containerRef) {
     let frameCount = 0;
     let fpsTime = 0;
     
+    let timeOfDay = 0;
+    
     const animate = () => {
       rafId = requestAnimationFrame(animate);
       const now = performance.now();
@@ -202,30 +221,77 @@ function useThreeScene(containerRef) {
           playerController.update(delta);
       }
       
+      // Time of day animation
+      timeOfDay += delta * 0.05;
+      const sunDist = 4500; // pushed further away
+      
+      const sunPos = new THREE.Vector3(
+        camera.position.x + Math.cos(timeOfDay) * sunDist,
+        camera.position.y + Math.sin(timeOfDay) * sunDist,
+        camera.position.z
+      );
+      
+      sunSprite.position.copy(sunPos);
+      
+      moonSprite.position.set(
+        camera.position.x + Math.cos(timeOfDay + Math.PI) * sunDist,
+        camera.position.y + Math.sin(timeOfDay + Math.PI) * sunDist,
+        camera.position.z
+      );
+
+      // Sincronizar parâmetros físicos do Céu com a GUI
+      const skyUniforms = sky.material.uniforms;
+      skyUniforms['turbidity'].value = globalLightingUniforms.uSkyTurbidity.value;
+      skyUniforms['rayleigh'].value = globalLightingUniforms.uSkyRayleigh.value;
+      skyUniforms['mieCoefficient'].value = globalLightingUniforms.uSkyMieCoefficient.value;
+      skyUniforms['mieDirectionalG'].value = globalLightingUniforms.uSkyMieDirectionalG.value;
+      
+      // Passar posição relativa do Sol para o Shader do Céu calcular o Halo e Cores
+      const relativeSunPos = sunPos.clone().sub(camera.position).normalize();
+      skyUniforms['sunPosition'].value.copy(relativeSunPos);
+
+      // Keep stars centered on camera and rotate slowly
+      stars.position.copy(camera.position);
+      stars.rotation.y -= delta * 0.005;
+
       // Keep sky dome centered on camera
       sky.position.copy(camera.position);
 
-      // Animate clouds
-      cloudsGroup.children.forEach(cloud => {
-        // move them along the Z axis very slowly (wind)
-        cloud.position.z -= delta * 2.5; 
+      // Animate clouds via InstancedMesh
+      if (cloud1Instanced && cloud2Instanced) {
+        let idx1 = 0; let idx2 = 0;
+        const wrapDist = 2400;
         
-        // Wrap around relative to camera to create infinite sky illusion
-        const wrapDist = 2400; // Increased wrap distance to prevent culling
-        
-        const dz = cloud.position.z - camera.position.z;
-        if (dz < -wrapDist) {
-          cloud.position.z += wrapDist * 2;
-          cloud.position.x = camera.position.x + (Math.random() - 0.5) * (wrapDist * 2);
-        } else if (dz > wrapDist) {
-          cloud.position.z -= wrapDist * 2;
+        for (let i = 0; i < cloudData.length; i++) {
+          const c = cloudData[i];
+          c.z -= delta * 2.5; 
+          
+          const dz = c.z - camera.position.z;
+          if (dz < -wrapDist) {
+            c.z += wrapDist * 2;
+            c.x = camera.position.x + (Math.random() - 0.5) * (wrapDist * 2);
+          } else if (dz > wrapDist) {
+            c.z -= wrapDist * 2;
+          }
+          
+          const dx = c.x - camera.position.x;
+          if (dx < -wrapDist) c.x += wrapDist * 2;
+          if (dx > wrapDist) c.x -= wrapDist * 2;
+          
+          cloudDummy.position.set(c.x, c.y, c.z);
+          cloudDummy.rotation.y = c.rotY;
+          cloudDummy.scale.set(18, 18, 18);
+          cloudDummy.updateMatrix();
+          
+          if (c.isG1) {
+            cloud1Instanced.setMatrixAt(idx1++, cloudDummy.matrix);
+          } else {
+            cloud2Instanced.setMatrixAt(idx2++, cloudDummy.matrix);
+          }
         }
-        
-        // X-axis wrap around (just in case)
-        const dx = cloud.position.x - camera.position.x;
-        if (dx < -wrapDist) cloud.position.x += wrapDist * 2;
-        if (dx > wrapDist) cloud.position.x -= wrapDist * 2;
-      });
+        cloud1Instanced.instanceMatrix.needsUpdate = true;
+        cloud2Instanced.instanceMatrix.needsUpdate = true;
+      }
 
       renderer.render(scene, camera);
     };
