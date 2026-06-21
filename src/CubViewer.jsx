@@ -1,9 +1,11 @@
-import React, { useState, useRef, useCallback, useMemo } from "react";
+import React, { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { i18n } from "./i18n";
+import { createStylizedMaterial } from "./Shaders";
+import { LightingGUI } from "./LightingGUI";
 
 /* ============================================================
-   PARSER .cub (formato Cube World "Steam" / pós-2019)
    ------------------------------------------------------------
    Layout binário:
      bytes 0-3   : width  (uint32 LE)
@@ -69,10 +71,13 @@ export function isSolidItem(voxels, width, depth, height, x, y, z) {
   return voxels[x + width * (y + depth * z)] === 1;
 }
 
-export function buildMeshGeometry({ width, depth, height, voxels, colors }) {
+export function buildMeshGeometry(parsed) {
+  const { width, depth, height, voxels, colors } = parsed;
+
   const positions = [];
   const normals = [];
   const vertexColors = [];
+  const aoBuffer = []; // NEW: Store AO equivalent
   const indices = [];
 
   let baseColor = null;
@@ -140,12 +145,16 @@ export function buildMeshGeometry({ width, depth, height, voxels, colors }) {
           const key = `${n[0]},${n[1]},${n[2]}`;
           const faceIdx = faceDefs[key];
           const shade = CUB_SHADE[key] || 1.0;
+          
+          // Map shade (0.2 - 1.0) to aoValue (0.0 - 1.0)
+          const aoValue = (shade - 0.2) / 0.8;
 
           for (const vi of faceIdx) {
             const [vx, vy, vz] = cubeVerts[vi];
             positions.push(x + vx, y + vy, z + vz);
             normals.push(n[0], n[1], n[2]);
-            vertexColors.push(r * shade, g * shade, b * shade);
+            vertexColors.push(r, g, b); // Unmultiplied base color
+            aoBuffer.push(aoValue);
           }
 
           indices.push(
@@ -162,6 +171,7 @@ export function buildMeshGeometry({ width, depth, height, voxels, colors }) {
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(vertexColors, 3));
+  geometry.setAttribute("aoValue", new THREE.Float32BufferAttribute(aoBuffer, 1));
   geometry.setIndex(indices);
   geometry.computeBoundingBox();
 
@@ -315,6 +325,11 @@ export default function CubViewer({ onBack }) {
   const [wireframe, setWireframe] = useState(false);
   const currentMeshRef = useRef(null);
 
+  useEffect(() => {
+    LightingGUI.mount();
+    return () => LightingGUI.unmount();
+  }, []);
+
   const onContainerReady = useCallback(
     (node) => {
       containerRef.current = node;
@@ -347,10 +362,7 @@ export default function CubViewer({ onBack }) {
           currentMeshRef.current.material.dispose();
         }
 
-        const material = new THREE.MeshLambertMaterial({
-          vertexColors: true,
-          wireframe,
-        });
+        const material = createStylizedMaterial(wireframe);
         const mesh = new THREE.Mesh(geometry, material);
         // centraliza geometria na origem do group, mas guardamos pivot real pro recenter
         state.group.position.set(

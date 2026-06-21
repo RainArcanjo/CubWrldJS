@@ -49,9 +49,8 @@ export function CharacterViewer3D({ config }) {
         character.group.rotation.y += 0.01;
       }
       
-      // Update animations so they stand idle smoothly (walking with 0 speed)
-      // Cube World chars just bob when walking, we can set speed to 0 so they just stand.
-      character.updateAnimation(0, 0.016);
+      // Test running! 1.0 = max speed
+      character.updateAnimation(1.0, 0.016);
 
       renderer.render(scene, camera);
     };

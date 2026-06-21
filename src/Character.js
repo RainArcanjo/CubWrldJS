@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { parseCub, buildMeshGeometry } from './CubViewer';
+import { createStylizedMaterial } from './Shaders';
 
 async function loadPart(url, colorHex = null, overrideColor = null, skinColorHex = null) {
   const res = await fetch(url);
@@ -60,17 +61,17 @@ async function loadPart(url, colorHex = null, overrideColor = null, skinColorHex
     const colors = geometry.attributes.color.array;
     for (let i = 0; i < colors.length; i += 3) {
       // For hands, original R was 1.0 (255) in hand.cub.
-      // Since CUB_SHADE was already applied, colors[i] currently equals exactly the shade value!
-      // So we can perfectly tint it by doing c * shade.
-      const shade = colors[i];
-      colors[i]     = c.r * shade;
-      colors[i + 1] = c.g * shade;
-      colors[i + 2] = c.b * shade;
+      // We just replace the base color with the override color.
+      // The ShaderMaterial will apply the face shading via aoValue!
+      const baseR = colors[i];
+      colors[i]     = c.r * baseR;
+      colors[i + 1] = c.g * baseR;
+      colors[i + 2] = c.b * baseR;
     }
     geometry.attributes.color.needsUpdate = true;
   }
 
-  const material = new THREE.MeshBasicMaterial({ vertexColors: true });
+  const material = createStylizedMaterial(false);
   const mesh = new THREE.Mesh(geometry, material);
 
   // Center mesh on its own origin

@@ -37,6 +37,7 @@ export const i18n = {
   worldControls: "World Controls",
   worldSeed: "World Seed",
   generate: "Generate",
+  renderDistance: "Render Distance",
   wireframeMode: "Wireframe Mode",
   controls: "Controls",
   controlClick: "Click on screen to focus (Pointer Lock)",

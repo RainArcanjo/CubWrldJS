@@ -4,13 +4,25 @@ import { WorldGenerator, CHUNK_WIDTH, CHUNK_DEPTH } from "./WorldGenerator";
 import { buildChunkMeshGeometry } from "./Mesher";
 import { Character } from "./Character";
 import { PlayerController } from "./PlayerController";
+import { LightingGUI } from "./LightingGUI";
 import { parseCub, buildMeshGeometry as buildItemGeometry } from "./CubViewer";
 import { CharacterCreator } from "./CharacterCreator";
 import { i18n } from "./i18n";
+import { createStylizedMaterial } from "./Shaders";
 
 function useThreeScene(containerRef) {
   const stateRef = useRef(null);
   const generatorRef = useRef(null); // Reference to the active WorldGenerator
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    LightingGUI.mount();
+
+    return () => {
+      LightingGUI.unmount();
+    };
+  }, [containerRef]);
 
   const init = useCallback(() => {
     const container = containerRef.current;
@@ -20,8 +32,7 @@ function useThreeScene(containerRef) {
     const height = container.clientHeight;
 
     const scene = new THREE.Scene();
-    // Cube World screenshot fog: matches the lighter horizon color
-    scene.fog = new THREE.FogExp2(0x7ec8e3, 0.010);
+    // Fog is now handled by Height Volumetric Fog inside Shaders.js
 
     // ─── SKY DOME ─────────────────────────────────────────────────────────────
     // Values extracted EXACTLY from Cube.exe compiled HLSL shader bytecode (IDA Pro):
@@ -75,7 +86,7 @@ function useThreeScene(containerRef) {
     const sky = new THREE.Mesh(skyGeo, skyMat);
     scene.add(sky);
 
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 4000);
     camera.position.set(0, 100, 100);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -93,6 +104,53 @@ function useThreeScene(containerRef) {
 
     const group = new THREE.Group();
     scene.add(group);
+
+    // ─── CLOUDS ───────────────────────────────────────────────────────────────
+    const cloudsGroup = new THREE.Group();
+    scene.add(cloudsGroup);
+
+    async function loadClouds() {
+      try {
+        const c1Res = await fetch('/sprites/cloud01.cub');
+        const c2Res = await fetch('/sprites/cloud02.cub');
+        const c1Buf = await c1Res.arrayBuffer();
+        const c2Buf = await c2Res.arrayBuffer();
+        
+        const g1 = buildItemGeometry(parseCub(c1Buf)).geometry;
+        const g2 = buildItemGeometry(parseCub(c2Buf)).geometry;
+        
+        const mat = createStylizedMaterial();
+        
+        // Grid-based placement with jitter to prevent overlap and clumping
+        const gridSize = 6; // 6x6 grid = 36 clouds
+        const spacing = 800; // Spaced 800 units apart (spread them wide)
+        const startOffset = - (gridSize * spacing) / 2;
+
+        for (let ix = 0; ix < gridSize; ix++) {
+          for (let iz = 0; iz < gridSize; iz++) {
+            const mesh = new THREE.Mesh(Math.random() > 0.5 ? g1 : g2, mat);
+            mesh.scale.set(18, 18, 18);
+            
+            // Base grid position + random jitter (-300 to 300)
+            const jitterX = (Math.random() - 0.5) * 600;
+            const jitterZ = (Math.random() - 0.5) * 600;
+            
+            mesh.position.set(
+              startOffset + ix * spacing + jitterX, 
+              250 + Math.random() * 40,     
+              startOffset + iz * spacing + jitterZ  
+            );
+            
+            mesh.rotation.y = Math.floor(Math.random() * 4) * (Math.PI / 2);
+            cloudsGroup.add(mesh);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load clouds", err);
+      }
+    }
+    loadClouds();
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Initialize Player and Controller
     const character = new Character();
@@ -146,6 +204,28 @@ function useThreeScene(containerRef) {
       
       // Keep sky dome centered on camera
       sky.position.copy(camera.position);
+
+      // Animate clouds
+      cloudsGroup.children.forEach(cloud => {
+        // move them along the Z axis very slowly (wind)
+        cloud.position.z -= delta * 2.5; 
+        
+        // Wrap around relative to camera to create infinite sky illusion
+        const wrapDist = 2400; // Increased wrap distance to prevent culling
+        
+        const dz = cloud.position.z - camera.position.z;
+        if (dz < -wrapDist) {
+          cloud.position.z += wrapDist * 2;
+          cloud.position.x = camera.position.x + (Math.random() - 0.5) * (wrapDist * 2);
+        } else if (dz > wrapDist) {
+          cloud.position.z -= wrapDist * 2;
+        }
+        
+        // X-axis wrap around (just in case)
+        const dx = cloud.position.x - camera.position.x;
+        if (dx < -wrapDist) cloud.position.x += wrapDist * 2;
+        if (dx > wrapDist) cloud.position.x -= wrapDist * 2;
+      });
 
       renderer.render(scene, camera);
     };
@@ -205,14 +285,27 @@ export default function WorldViewer({ onBack, charConfig }) {
   const decorationMeshRef = useRef(null); // Reference to the loaded .cub geometry and material
 
   const [seed, setSeed] = useState(Math.floor(Math.random() * 1000000).toString());
+  const [renderRadius, setRenderRadius] = useState(4);
 
   useEffect(() => {
-    // We use Basic material because Mesher.js bakes Cube World's distinct
-    // directional shading and AO directly into the vertex colors!
-    materialsRef.current = new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      wireframe: wireframe
-    });
+    materialsRef.current = createStylizedMaterial(wireframe);
+  }, []);
+
+  useEffect(() => {
+    // Attempt to load a simple bush or tree to decorate the world
+    fetch('/sprites/wood-tree-random1.cub')
+      .then(res => {
+        if (!res.ok) throw new Error();
+        return res.arrayBuffer();
+      })
+      .then(buf => {
+         const parsed = parseCub(buf);
+         const { geometry } = buildItemGeometry(parsed);
+         const material = new THREE.MeshBasicMaterial({ vertexColors: true });
+         decorationMeshRef.current = { mesh: new THREE.Mesh(geometry, material), h: parsed.height };
+         // Optionally regenerate world if we wanted trees immediately
+      })
+      .catch(err => console.log("Tree model not found for decoration"));
   }, []);
 
   const onContainerReady = useCallback(
@@ -263,7 +356,6 @@ export default function WorldViewer({ onBack, charConfig }) {
         state.chunkGroup.remove(child); 
     }
 
-    const renderRadius = 4; // 8x8 chunks (128x128 voxels)
     let totalVoxels = 0;
     let chunksGenerated = 0;
     let decorationsPlaced = 0;
@@ -358,6 +450,17 @@ export default function WorldViewer({ onBack, charConfig }) {
                 />
                 <button onClick={handleRegenerate} style={{ padding: "4px 8px", cursor: "pointer" }}>{i18n.generate}</button>
               </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <label htmlFor="radius-input" style={{ fontSize: 12 }}>{i18n.renderDistance || "Render Distance"} ({renderRadius}):</label>
+              <input 
+                id="radius-input" 
+                type="range" 
+                min="2" 
+                max="10" 
+                value={renderRadius} 
+                onChange={(e) => setRenderRadius(parseInt(e.target.value))} 
+              />
             </div>
             <div className="field-row">
               <input 

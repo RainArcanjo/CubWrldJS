@@ -69,15 +69,10 @@ export class WorldGenerator {
   }
   
   applyColor(colorsArray, index, baseColor, gx, gy, gz) {
-      // 1:1 Cube World procedural color variation technique
-      // Uses a high-frequency 3D noise field to "dirty" the voxel colors
-      const noiseVal = this.noise3D_color(gx * 0.15, gy * 0.15, gz * 0.15);
-      // variation from 0.85 to 1.15
-      const variation = 1.0 + noiseVal * 0.15;
-      
-      colorsArray[index * 3] = Math.min(255, Math.max(0, baseColor[0] * variation));
-      colorsArray[index * 3 + 1] = Math.min(255, Math.max(0, baseColor[1] * variation));
-      colorsArray[index * 3 + 2] = Math.min(255, Math.max(0, baseColor[2] * variation));
+      // Removed high-frequency noise variation to favor the clean stylized shader ramping
+      colorsArray[index * 3] = baseColor[0];
+      colorsArray[index * 3 + 1] = baseColor[1];
+      colorsArray[index * 3 + 2] = baseColor[2];
   }
 
   getTerrainHeight(globalX, globalZ) {

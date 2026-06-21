@@ -61,6 +61,7 @@ export function buildChunkMeshGeometry(W, H, D, voxels, colors) {
   const positions    = [];
   const normals      = [];
   const vertexColors = [];
+  const aoBuffer     = []; // NEW
   const indices      = [];
   let vc = 0;
 
@@ -110,10 +111,13 @@ export function buildChunkMeshGeometry(W, H, D, voxels, colors) {
             return vertexAO(side1, side2, corner);
           });
 
-          // Combine face shade + AO for each vertex color
-          const fr = [0,1,2,3].map(i => rB * shade * AO_CURVE[aoVals[i]]);
-          const fg = [0,1,2,3].map(i => gB * shade * AO_CURVE[aoVals[i]]);
-          const fb = [0,1,2,3].map(i => bB * shade * AO_CURVE[aoVals[i]]);
+          // Output raw aoValues normalized to 0.0 - 1.0
+          const aoNormals = [0,1,2,3].map(i => aoVals[i] / 3.0);
+
+          // Combine face shade for each vertex color (skip AO multiply)
+          const fr = [0,1,2,3].map(i => rB * shade);
+          const fg = [0,1,2,3].map(i => gB * shade);
+          const fb = [0,1,2,3].map(i => bB * shade);
 
           // Flip quad orientation if AO creates a "concave" artifact
           const flip = (aoVals[0] + aoVals[2]) < (aoVals[1] + aoVals[3]);
@@ -123,6 +127,7 @@ export function buildChunkMeshGeometry(W, H, D, voxels, colors) {
             positions.push(x+px, y+py, z+pz);
             normals.push(nx, ny, nz);
             vertexColors.push(fr[i], fg[i], fb[i]);
+            aoBuffer.push(aoNormals[i]);
           }
 
           if (flip) {
@@ -141,6 +146,7 @@ export function buildChunkMeshGeometry(W, H, D, voxels, colors) {
   geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute("normal",   new THREE.Float32BufferAttribute(normals, 3));
   geo.setAttribute("color",    new THREE.Float32BufferAttribute(vertexColors, 3));
+  geo.setAttribute("aoValue",  new THREE.Float32BufferAttribute(aoBuffer, 1));
   geo.setIndex(indices);
   geo.computeBoundingSphere();
   geo.computeBoundingBox();
