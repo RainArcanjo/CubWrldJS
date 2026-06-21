@@ -38,6 +38,8 @@ export class PlayerController {
 
     // ── Camera params ────────────────────────────────────────────────────────
     this.CAM_DIST    = 8.0;
+    this.CAM_DIST_MIN = 2.0;
+    this.CAM_DIST_MAX = 30.0;
     this.CAM_HEIGHT  = 2.5;   // camera target height above player feet
     this.PITCH_MIN   = -0.4;  // look down limit (radians)
     this.PITCH_MAX   =  1.1;  // look up limit
@@ -54,17 +56,25 @@ export class PlayerController {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup',   this._onKeyUp);
 
-    // ── Mouse look ────────────────────────────────────────────────────────────
+    // ── Mouse look & zoom ────────────────────────────────────────────────────
     this.onMouseMove = (dx, dy) => {
       this.yaw   -= dx * 0.002;
       this.pitch += dy * 0.002;
       this.pitch  = Math.max(this.PITCH_MIN, Math.min(this.PITCH_MAX, this.pitch));
     };
+
+    this._onWheel = (e) => {
+      // e.deltaY is positive when scrolling down (zoom out)
+      this.CAM_DIST += e.deltaY * 0.01;
+      this.CAM_DIST = Math.max(this.CAM_DIST_MIN, Math.min(this.CAM_DIST_MAX, this.CAM_DIST));
+    };
+    window.addEventListener('wheel', this._onWheel, { passive: true });
   }
 
   cleanup() {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup',   this._onKeyUp);
+    window.removeEventListener('wheel',   this._onWheel);
   }
 
   update(delta) {

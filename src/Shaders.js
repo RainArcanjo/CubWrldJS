@@ -12,7 +12,7 @@ export const globalLightingUniforms = {
   
   // Volumetric Height Fog Uniforms
   uFogColor: { value: new THREE.Color(0x7ec8e3) }, // Matches default sky horizon
-  uFogDensity: { value: 0.005 },
+  uFogDensity: { value: 0.001 }, // REDUCED drastically to allow seeing chunks far away!
   uFogHeightFalloff: { value: 0.015 },
   uFogBaseHeight: { value: 50.0 },
   

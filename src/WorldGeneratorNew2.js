@@ -2,13 +2,13 @@ import { createNoise2D, createNoise3D } from 'simplex-noise';
 import alea from 'alea';
 
 // Constants
-export const CHUNK_WIDTH = 64; // Increased to 64x64 to allow colossal trees to fit without clipping
-export const CHUNK_DEPTH = 64;
+export const CHUNK_WIDTH = 32;
+export const CHUNK_DEPTH = 32;
 export const CHUNK_HEIGHT = 128; // Increased for massive amplitude
 export const WATER_LEVEL = 20;
 
-const VORONOI_CELL_SIZE = 384; // Hybrid size (was 256, then 1024)
-const BLEND_RADIUS = 96.0; // Distance to blend between biomes
+const VORONOI_CELL_SIZE = 1024;
+const BLEND_RADIUS = 256.0; // Distance to blend between biomes
 
 // Biome definitions
 const BIOMES = {
@@ -30,25 +30,25 @@ const TREE_STYLES = {
 // Shapers dictionary
 const SHAPERS = {
   plains: (x, z, noise2D) => {
-    let e = 1 * noise2D(x * 0.005, z * 0.005) + 0.25 * noise2D(x * 0.02, z * 0.02);
+    let e = 1 * noise2D(x * 0.001, z * 0.001) + 0.25 * noise2D(x * 0.004, z * 0.004);
     return e * 15 + 22; // Suave
   },
   forest: (x, z, noise2D) => {
-    let e = 1 * noise2D(x * 0.01, z * 0.01) + 0.5 * noise2D(x * 0.03, z * 0.03);
+    let e = 1 * noise2D(x * 0.002, z * 0.002) + 0.5 * noise2D(x * 0.006, z * 0.006);
     return e * 20 + 26; // Médio
   },
   desert: (x, z, noise2D) => {
-    let e = Math.sin(x * 0.02 + noise2D(x * 0.01, z * 0.01) * 2) * Math.cos(z * 0.02);
+    let e = Math.sin(x * 0.004 + noise2D(x * 0.002, z * 0.002) * 2) * Math.cos(z * 0.004);
     return Math.abs(e) * 25 + 22; 
   },
   mountain: (x, z, noise2D) => {
-    let n1 = 1.0 - Math.abs(noise2D(x * 0.008, z * 0.008) * 2 - 1);
-    let n2 = 1.0 - Math.abs(noise2D(x * 0.02, z * 0.02) * 2 - 1);
+    let n1 = 1.0 - Math.abs(noise2D(x * 0.0016, z * 0.0016) * 2 - 1);
+    let n2 = 1.0 - Math.abs(noise2D(x * 0.004, z * 0.004) * 2 - 1);
     let e = n1 * n1 + 0.5 * (n2 * n2);
     return e * 60 + 22; // Colossal peaks
   },
   snow: (x, z, noise2D) => {
-    let e = 1 * noise2D(x * 0.006, z * 0.006) + 0.5 * noise2D(x * 0.015, z * 0.015);
+    let e = 1 * noise2D(x * 0.0012, z * 0.0012) + 0.5 * noise2D(x * 0.003, z * 0.003);
     return e * 40 + 35; // Alto e rolling
   }
 };
@@ -140,7 +140,7 @@ export class WorldGenerator {
     };
   }
 
-  getTerrainData(globalX, globalZ, chunkX, chunkZ) {
+  getTerrainData(globalX, globalZ) {
     const vd = this.getVoronoiData(globalX, globalZ);
     
     const h1 = SHAPERS[vd.b1.id](globalX, globalZ, this.noise2D.bind(this));
@@ -214,7 +214,8 @@ export class WorldGenerator {
         const globalZ = chunkZ * CHUNK_DEPTH + z;
         
         const data = this.getTerrainData(globalX, globalZ);
-        let yMax = data.yMax;
+        const yMax = data.yMax;
+        
         let surfaceColor = data.color;
         
         // Override color if it's a path, but only above water!
@@ -249,18 +250,13 @@ export class WorldGenerator {
 
     const features = [];
     if (chunkBiome === BIOMES.FOREST || chunkBiome === BIOMES.PLAINS || chunkBiome === BIOMES.SNOW) {
-      // Very separated trees: 4 per 64x64 chunk for forests, 1 for plains
-      let featureCount = 0;
-      if (chunkBiome === BIOMES.FOREST) featureCount = 4;
-      else if (chunkBiome === BIOMES.PLAINS || chunkBiome === BIOMES.SNOW) featureCount = 1;
-      
+      const featureCount = chunkBiome === BIOMES.FOREST ? 6 : 2;
       const cellPrng = alea(`${this.seed}_features_${chunkX}_${chunkZ}`);
       
       for (let i = 0; i < featureCount; i++) {
-        let isColossalFeature = cellPrng() > 0.85; // Colossal tree logic
-        // Lock massive trees strictly to the center (lx=32, lz=32) so their massive leaves don't hit the chunk boundaries
-        const lx = isColossalFeature ? Math.floor(cellPrng() * 16) + 24 : Math.floor(cellPrng() * CHUNK_WIDTH);
-        const lz = isColossalFeature ? Math.floor(cellPrng() * 16) + 24 : Math.floor(cellPrng() * CHUNK_DEPTH);
+        let isColossalFeature = cellPrng() > 0.97;
+        const lx = isColossalFeature ? Math.floor(cellPrng() * 16) + 8 : Math.floor(cellPrng() * CHUNK_WIDTH);
+        const lz = isColossalFeature ? Math.floor(cellPrng() * 16) + 8 : Math.floor(cellPrng() * CHUNK_DEPTH);
         const localY = heightMap[lx + CHUNK_WIDTH * lz];
         
         const globalX = chunkX * CHUNK_WIDTH + lx;
@@ -376,9 +372,7 @@ export class WorldGenerator {
         const { width: lW, depth: lD, height: lH, voxels: lVoxels, colors: lColors } = WorldGenerator.leafTemplate;
         
         for (let branch of branches) {
-            // CAP LEAF SCALE at 3 to prevent them from surpassing the 64x64 chunk bounds and clipping!
-            // The trunk can still be scale 5 (massive pillar) but leaves will be clamped to safe rendering width.
-            const bScale = Math.min(branch.scale, 3); 
+            const bScale = branch.scale;
             const offsetX = branch.x - Math.floor((lW * bScale) / 2);
             const offsetY = branch.y - Math.floor((lH * bScale) / 4);
             const offsetZ = branch.z - Math.floor((lD * bScale) / 2);

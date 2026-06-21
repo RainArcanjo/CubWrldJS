@@ -116,6 +116,18 @@ function useThreeScene(containerRef) {
         
         const g1 = buildItemGeometry(parseCub(c1Buf)).geometry;
         const g2 = buildItemGeometry(parseCub(c2Buf)).geometry;
+
+        try {
+          const leavesRes = await fetch('/sprites/tree-leaves.cub');
+          if (leavesRes.ok) {
+            const leavesBuf = await leavesRes.arrayBuffer();
+            WorldGenerator.setLeafTemplate(parseCub(leavesBuf));
+          } else {
+            console.warn("tree-leaves.cub returned status", leavesRes.status);
+          }
+        } catch (leafErr) {
+          console.warn("Failed to load tree-leaves.cub", leafErr);
+        }
         
         const mat = createStylizedMaterial();
         
@@ -221,6 +233,11 @@ function useThreeScene(containerRef) {
           playerController.update(delta);
       }
       
+      // Dynamic Chunk Loading (DISABLED)
+      // if (stateRef.current && stateRef.current.onUpdateChunks) {
+      //    stateRef.current.onUpdateChunks();
+      // }
+      
       // Time of day animation
       timeOfDay += delta * 0.05;
       const sunDist = 4500; // pushed further away
@@ -249,6 +266,28 @@ function useThreeScene(containerRef) {
       // Passar posição relativa do Sol para o Shader do Céu calcular o Halo e Cores
       const relativeSunPos = sunPos.clone().sub(camera.position).normalize();
       skyUniforms['sunPosition'].value.copy(relativeSunPos);
+
+      // Sincronizar a cor do Fog volumétrico com o horizonte do Céu
+      let sunY = relativeSunPos.y;
+      if (sunY < 0.2 && sunY > -0.2) {
+          // Sunset/Sunrise: Orange to Dark Blue
+          let t = (sunY + 0.2) / 0.4; // 0 (Night) to 1 (Day)
+          const colorNight = new THREE.Color(0x050510);
+          const colorDay = new THREE.Color(0x7ec8e3);
+          const colorSunset = new THREE.Color(0xff8c00); // Laranja avermelhado
+          
+          if (t < 0.5) {
+             let subT = t / 0.5;
+             globalLightingUniforms.uFogColor.value.lerpColors(colorNight, colorSunset, subT);
+          } else {
+             let subT = (t - 0.5) / 0.5;
+             globalLightingUniforms.uFogColor.value.lerpColors(colorSunset, colorDay, subT);
+          }
+      } else if (sunY <= -0.2) {
+          globalLightingUniforms.uFogColor.value.setHex(0x050510); // Night
+      } else {
+          globalLightingUniforms.uFogColor.value.setHex(0x7ec8e3); // Day
+      }
 
       // Keep stars centered on camera and rotate slowly
       stars.position.copy(camera.position);
@@ -339,8 +378,6 @@ export default function WorldViewer({ onBack, charConfig }) {
   // Initialize with charConfig once, and also update when it changes
   useEffect(() => {
     if (stateRef.current && stateRef.current.character && charConfig) {
-      // If it's just appearance, we could call setAppearance.
-      // But load() is safer to ensure it reconstructs correctly from config.
       stateRef.current.character.setAppearance(charConfig);
     }
   }, [charConfig, stateRef.current]);
@@ -351,7 +388,11 @@ export default function WorldViewer({ onBack, charConfig }) {
   const decorationMeshRef = useRef(null); // Reference to the loaded .cub geometry and material
 
   const [seed, setSeed] = useState(Math.floor(Math.random() * 1000000).toString());
-  const [renderRadius, setRenderRadius] = useState(4);
+  const [renderRadius, setRenderRadius] = useState(4); // Balanced for 64x64 chunks (huge draw distance)
+  
+  const activeChunksRef = useRef(new Map());
+  const generatingChunksRef = useRef(new Set());
+  const lastChunkPosRef = useRef({ x: null, z: null });
 
   useEffect(() => {
     materialsRef.current = createStylizedMaterial(wireframe);
@@ -407,6 +448,29 @@ export default function WorldViewer({ onBack, charConfig }) {
     generateWorld(seed);
   };
 
+  const generateChunkAsync = (cx, cz, state, generator) => new Promise(resolve => {
+    setTimeout(() => {
+        const chunkData = generator.generateChunk(cx, cz);
+        const geometry = buildChunkMeshGeometry(
+            chunkData.width, chunkData.height, chunkData.depth,
+            chunkData.voxels, chunkData.colors
+        );
+        
+        const mesh = new THREE.Mesh(geometry, materialsRef.current);
+        mesh.position.set(cx * CHUNK_WIDTH, 0, cz * CHUNK_DEPTH);
+        state.chunkGroup.add(mesh);
+        
+        let solidCount = 0;
+        for(let i=0; i<chunkData.voxels.length; i++) if(chunkData.voxels[i]) solidCount++;
+        
+        resolve({ mesh, solidCount });
+    }, 0);
+  });
+
+  // DISABLED dynamic chunk manager loop, kept here for reference
+  // const updateChunks = () => { ... }
+  // useEffect(() => { ... }, []);
+
   const generateWorld = async (currentSeed) => {
     setStatus(i18n.generatingWorld);
     const state = stateRef.current;
@@ -424,7 +488,6 @@ export default function WorldViewer({ onBack, charConfig }) {
 
     let totalVoxels = 0;
     let chunksGenerated = 0;
-    let decorationsPlaced = 0;
 
     const generateChunkAsync = (cx, cz) => new Promise(resolve => {
         setTimeout(() => {
@@ -441,42 +504,19 @@ export default function WorldViewer({ onBack, charConfig }) {
             let solidCount = 0;
             for(let i=0; i<chunkData.voxels.length; i++) if(chunkData.voxels[i]) solidCount++;
             
-            // Stamp features if we have a decoration loaded
-            if (decorationMeshRef.current && chunkData.features) {
-                for (const feature of chunkData.features) {
-                    const localY = chunkData.heightMap[feature.x + CHUNK_WIDTH * feature.z];
-                    
-                    const decoGroup = new THREE.Group();
-                    const clone = decorationMeshRef.current.mesh.clone();
-                    decoGroup.add(clone);
-                    
-                    // Scale down the .cub object
-                    decoGroup.scale.set(0.1, 0.1, 0.1);
-                    
-                    // Position at world coordinates
-                    decoGroup.position.set(
-                        cx * CHUNK_WIDTH + feature.x + 0.5,
-                        localY + 1, // Place exactly on top of the surface voxel
-                        cz * CHUNK_DEPTH + feature.z + 0.5
-                    );
-                    
-                    state.chunkGroup.add(decoGroup);
-                    decorationsPlaced++;
-                }
-            }
-            
-            resolve({ solidCount, decorationsPlaced });
-        }, 0);
+            resolve({ solidCount });
+        }, 0); // small delay to yield UI
     });
 
-    let currentDecorations = 0;
+    // Determine the map boundaries based on renderRadius
+    // This generates a static grid around the center (0,0) exactly like the old system!
     for (let cz = -renderRadius; cz < renderRadius; cz++) {
         for (let cx = -renderRadius; cx < renderRadius; cx++) {
+            setStatus(`Loading Map (${chunksGenerated}/${(renderRadius*2)*(renderRadius*2)})...`);
             const result = await generateChunkAsync(cx, cz);
             totalVoxels += result.solidCount;
             chunksGenerated++;
-            currentDecorations = result.decorationsPlaced;
-            setStats({ chunks: chunksGenerated, voxels: totalVoxels, decorations: currentDecorations });
+            setStats({ chunks: chunksGenerated, voxels: totalVoxels, decorations: 0 });
         }
     }
 
@@ -493,13 +533,32 @@ export default function WorldViewer({ onBack, charConfig }) {
     });
   }, []);
 
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      if (containerRef.current) {
+        containerRef.current.requestFullscreen().catch(err => {
+          console.error(`Error attempting to enable fullscreen: ${err.message}`);
+        });
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "row", height: "100%", width: "100%", fontFamily: "Segoe UI, Tahoma, sans-serif" }}>
       <div style={{ width: "260px", padding: "8px", display: "flex", flexDirection: "column", gap: "12px", borderRight: "1px solid #dfdfdf", background: "#f0f0f0" }}>
         
-        <button onClick={onBack} style={{ alignSelf: 'flex-start', padding: '4px 8px', cursor: 'pointer' }}>
-          &larr; {i18n.backToMenu}
-        </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={onBack} style={{ padding: '4px 8px', cursor: 'pointer' }}>
+            &larr; {i18n.backToMenu}
+          </button>
+          <button onClick={toggleFullscreen} style={{ padding: '4px 8px', cursor: 'pointer' }}>
+            ⛶ Fullscreen
+          </button>
+        </div>
 
         <fieldset>
           <legend>{i18n.worldControls}</legend>
@@ -574,7 +633,7 @@ export default function WorldViewer({ onBack, charConfig }) {
 
       <div
         ref={onContainerReady}
-        style={{ flex: 1, position: "relative", border: "1px inset #ccc", background: "#fff", margin: "8px", boxSizing: "border-box" }}
+        style={{ flex: 1, position: "relative", border: "1px inset #ccc", background: "#fff", margin: "8px", boxSizing: "border-box", overflow: "hidden" }}
       >
       </div>
     </div>
