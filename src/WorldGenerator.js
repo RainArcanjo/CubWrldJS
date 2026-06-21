@@ -66,6 +66,36 @@ export class WorldGenerator {
     this.noise2DRaw = createNoise2D(alea(seed + "_height"));
     this.noise2DPath = createNoise2D(alea(seed + "_path")); // For roads
     this.voronoiCache = new Map();
+    this.chunks = new Map(); // key: chunkId -> chunkData
+  }
+
+  getVoxel(globalX, globalY, globalZ) {
+    if (globalY < 0 || globalY >= CHUNK_HEIGHT) return 0;
+    
+    // Convert to integers
+    const x = Math.floor(globalX);
+    const y = Math.floor(globalY);
+    const z = Math.floor(globalZ);
+
+    const chunkX = Math.floor(x / CHUNK_WIDTH);
+    const chunkZ = Math.floor(z / CHUNK_DEPTH);
+    
+    const key = `${chunkX},${chunkZ}`;
+    const chunkData = this.chunks.get(key);
+    
+    if (!chunkData) {
+        // If chunk is not loaded, fallback to raw heightmap for base terrain
+        // but treat everything else as air
+        const terrainHeight = this.getTerrainHeight(x, z);
+        return y <= terrainHeight ? 1 : 0;
+    }
+    
+    // Local coordinates within chunk
+    const localX = x - chunkX * CHUNK_WIDTH;
+    const localZ = z - chunkZ * CHUNK_DEPTH;
+    
+    const idx = localX + CHUNK_WIDTH * (y + CHUNK_HEIGHT * localZ);
+    return chunkData.voxels[idx];
   }
 
   noise2D(x, z) {
@@ -141,6 +171,51 @@ export class WorldGenerator {
   }
 
   getTerrainData(globalX, globalZ, chunkX, chunkZ) {
+    if (this.seed && this.seed.trim().toLowerCase() === 'dev') {
+        const ZONE_SIZE = 64; // biome width
+        const GAP = 10;
+        const TOTAL_SIZE = ZONE_SIZE + GAP;
+
+        // Shift coordinates so that chunk 0,0 falls nicely into a biome zone
+        const posX = Math.abs(globalX);
+        const posZ = Math.abs(globalZ);
+
+        const localX = posX % TOTAL_SIZE;
+        const localZ = posZ % TOTAL_SIZE;
+
+        let isPath = false;
+        let finalColor;
+        let biome;
+
+        // If in gap (10 blocks)
+        if (localX >= ZONE_SIZE || localZ >= ZONE_SIZE) {
+            isPath = true; // Prevents tree generation
+            finalColor = [90, 90, 90]; // Stone
+            biome = BIOMES.PLAINS;
+        } else {
+            // Inside a biome zone
+            const gridX = Math.floor(posX / TOTAL_SIZE);
+            const gridZ = Math.floor(posZ / TOTAL_SIZE);
+            
+            const biomeList = [
+                BIOMES.PLAINS, BIOMES.FOREST, BIOMES.SNOW,
+                BIOMES.DESERT, BIOMES.MOUNTAIN
+            ];
+            
+            const bIndex = (gridX + gridZ * 3) % biomeList.length;
+            biome = biomeList[bIndex];
+            finalColor = biome.color;
+        }
+
+        return {
+            height: 21,
+            yMax: 20,
+            color: finalColor,
+            primaryBiome: biome,
+            isPath: isPath
+        };
+    }
+
     const vd = this.getVoronoiData(globalX, globalZ);
     
     const h1 = SHAPERS[vd.b1.id](globalX, globalZ, this.noise2D.bind(this));
@@ -289,11 +364,14 @@ export class WorldGenerator {
       }
     }
 
-    return {
+    const chunkData = {
       chunkX, chunkZ,
       width: CHUNK_WIDTH, height: CHUNK_HEIGHT, depth: CHUNK_DEPTH,
       voxels, colors, heightMap, biome: chunkBiome, features
     };
+    
+    this.chunks.set(`${chunkX},${chunkZ}`, chunkData);
+    return chunkData;
   }
 
   generateProceduralTree(startX, startY, startZ, voxels, colors, prng, chunkX, chunkZ, biome, style) {

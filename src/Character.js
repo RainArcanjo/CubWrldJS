@@ -87,6 +87,9 @@ async function loadPart(url, colorHex = null, overrideColor = null, skinColorHex
 
 // Helper to try loading race-specific part, falling back to generic human part
 async function loadPartFallback(urls, colorHex = null, overrideColor = null, skinColorHex = null) {
+  if (!urls || urls.length === 0) {
+    return { node: new THREE.Group(), W: 1, D: 1, H: 1 };
+  }
   for (let i = 0; i < urls.length; i++) {
     try {
       return await loadPart(urls[i], colorHex, overrideColor, skinColorHex);
@@ -177,10 +180,11 @@ export class Character {
       const headPaths = [
         `/sprites/${race}-head-${g}${pad(face)}.cub`,
         `/sprites/${race}-head-${g}.cub`,
+        `/sprites/${race}-head.cub`,
         `/sprites/human-head-m01.cub`
       ];
 
-      const hairPaths = [
+      const hairPaths = hair === 'none' ? [] : [
         `/sprites/${race}-hair-${g}${pad(hair)}.cub`,
         `/sprites/${race}-hair-base.cub`,
         `/sprites/human-hair-m01.cub`
@@ -240,10 +244,12 @@ export class Character {
 
       // Arm hangs DOWN from shoulder pivot
       armL.node.position.y = -armL.H * 0.5;
+      armL.node.rotation.y = Math.PI / 2; // Anti-clockwise
       this.leftArmG.position.set(armSideOffset, armY, 0);
       this.leftArmG.add(armL.node);
 
       armR.node.position.y = -armR.H * 0.5;
+      armR.node.rotation.y = Math.PI / 2; // Anti-clockwise
       this.rightArmG.position.set(-armSideOffset, armY, 0);
       this.rightArmG.add(armR.node);
 
@@ -264,8 +270,18 @@ export class Character {
     }
   }
 
-  updateAnimation(speed, delta) {
+  updateAnimation(state, delta) {
     if (!this.loaded) return;
+
+    // Support legacy call from CharacterViewer3D
+    const isStateObj = typeof state === 'object';
+    const speed = isStateObj ? state.speed : state;
+    const isGrounded = isStateObj ? state.isGrounded : true;
+    const isDashing = isStateObj ? state.isDashing : false;
+    const dashProgress = isStateObj ? state.dashProgress : 0;
+    const isAttacking = isStateObj ? state.isAttacking : false;
+    const attackProgress = isStateObj ? state.attackProgress : 0;
+    const fallSpeed = isStateObj ? state.fallSpeed : 0;
 
     const FREQ = 2.4 * Math.PI * 2;
     const ARM_AMP = 0.65;
@@ -275,18 +291,72 @@ export class Character {
     if (speed > 0.05) {
       this.walkTime += delta * FREQ * speed;
     } else {
-      this.walkTime *= 0.80;
+      this.walkTime *= 0.80; // drag walk time to 0
     }
 
-    const s = Math.sin(this.walkTime);
+    // Reset base rotations
+    this.group.rotation.x = 0;
+    this.headG.position.y = this._headBaseY;
 
-    this.leftArmG.rotation.x  =  s * ARM_AMP * speed;
-    this.rightArmG.rotation.x = -s * ARM_AMP * speed;
+    if (isAttacking) {
+      // ── Attack Animation (Melee Swing) ──
+      // wind-up -> swing -> follow-through
+      // attackProgress goes from 0.0 to 1.0
+      
+      let swingAngle = 0;
+      if (attackProgress < 0.2) {
+        // Wind up (pull back)
+        swingAngle = -Math.PI * 0.4 * (attackProgress / 0.2);
+      } else if (attackProgress < 0.5) {
+        // Swing forward
+        const t = (attackProgress - 0.2) / 0.3;
+        swingAngle = -Math.PI * 0.4 + (Math.PI * 1.2) * t;
+      } else {
+        // Recovery
+        const t = (attackProgress - 0.5) / 0.5;
+        swingAngle = Math.PI * 0.8 * (1.0 - t);
+      }
+      
+      // Swing the right arm (using rotation.z and rotation.x depending on angle)
+      // Since fists face down natively, we swing X axis
+      this.rightArmG.rotation.x = swingAngle;
+      
+      // Keep left arm steady or slight back
+      this.leftArmG.rotation.x = -0.2;
+    }
+      
+    if (isDashing) {
+      // ── Dash (Roll) Animation ──
+      // 360 degree front flip
+      const rollAngle = dashProgress * Math.PI * 2;
+      this.group.rotation.x = rollAngle;
 
-    this.leftLegG.rotation.x  = -s * LEG_AMP * speed;
-    this.rightLegG.rotation.x =  s * LEG_AMP * speed;
+      // Tuck in arms and legs
+      this.leftArmG.rotation.x = Math.PI * 0.8;
+      this.rightArmG.rotation.x = Math.PI * 0.8;
+      this.leftLegG.rotation.x = -Math.PI * 0.4;
+      this.rightLegG.rotation.x = -Math.PI * 0.4;
+    } else if (!isGrounded && fallSpeed < -10) {
+      // ── Fall Animation ──
+      // Arms up in the air!
+      this.leftArmG.rotation.x = Math.PI * 0.8;
+      this.rightArmG.rotation.x = Math.PI * 0.8;
+      this.leftLegG.rotation.x = 0.2;
+      this.rightLegG.rotation.x = -0.2;
+    } else {
+      // ── Run/Walk Animation ──
+      const s = Math.sin(this.walkTime);
 
-    const bob = Math.abs(Math.sin(this.walkTime * 2)) * BOB_AMP * speed;
-    this.headG.position.y = this._headBaseY + bob;
+      if (!isAttacking && !isDashing && (isGrounded || fallSpeed >= -10)) {
+          this.leftArmG.rotation.x  =  s * ARM_AMP * speed;
+          this.rightArmG.rotation.x = -s * ARM_AMP * speed;
+      }
+
+      this.leftLegG.rotation.x  = -s * LEG_AMP * speed;
+      this.rightLegG.rotation.x =  s * LEG_AMP * speed;
+
+      const bob = Math.abs(Math.sin(this.walkTime * 2)) * BOB_AMP * speed;
+      this.headG.position.y = this._headBaseY + bob;
+    }
   }
 }

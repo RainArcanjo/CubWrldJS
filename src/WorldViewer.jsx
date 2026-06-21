@@ -4,6 +4,7 @@ import { WorldGenerator, CHUNK_WIDTH, CHUNK_DEPTH } from "./WorldGenerator";
 import { buildChunkMeshGeometry } from "./Mesher";
 import { Character } from "./Character";
 import { PlayerController } from "./PlayerController";
+import { NPCController } from "./NPCController";
 import { LightingGUI } from "./LightingGUI";
 import { parseCub, buildMeshGeometry as buildItemGeometry } from "./CubViewer";
 import { CharacterCreator } from "./CharacterCreator";
@@ -192,8 +193,19 @@ function useThreeScene(containerRef) {
         }
         return 0;
     };
+    
+    const getVoxel = (x, y, z) => {
+        if (generatorRef.current) {
+            return generatorRef.current.getVoxel(x, y, z);
+        }
+        return 0;
+    };
+    
+    const getNPCs = () => {
+        return stateRef.current ? stateRef.current.npcs : [];
+    };
 
-    const playerController = new PlayerController(character, camera, getGroundHeight);
+    const playerController = new PlayerController(character, camera, getGroundHeight, getVoxel, getNPCs);
 
     const dom = renderer.domElement;
     dom.addEventListener("click", () => {
@@ -231,6 +243,10 @@ function useThreeScene(containerRef) {
 
       if (document.pointerLockElement === dom) {
           playerController.update(delta);
+      }
+      
+      if (stateRef.current && stateRef.current.npcs) {
+          stateRef.current.npcs.forEach(npc => npc.update(delta));
       }
       
       // Dynamic Chunk Loading (DISABLED)
@@ -354,6 +370,7 @@ function useThreeScene(containerRef) {
       dom,
       playerController,
       character,
+      npcs: [],
       cleanup: () => {
         cancelAnimationFrame(rafId);
         resizeObserver.disconnect();
@@ -485,6 +502,12 @@ export default function WorldViewer({ onBack, charConfig }) {
         if (child.geometry) child.geometry.dispose();
         state.chunkGroup.remove(child); 
     }
+    
+    // Clear NPCs
+    if (state.npcs) {
+        state.npcs.forEach(npc => state.scene.remove(npc.character.group));
+        state.npcs = [];
+    }
 
     let totalVoxels = 0;
     let chunksGenerated = 0;
@@ -521,6 +544,24 @@ export default function WorldViewer({ onBack, charConfig }) {
     }
 
     setStatus(i18n.ready);
+    
+    // Spawn 5 Zombies near the player spawn point
+    const getVoxel = (x, y, z) => {
+        if (generatorRef.current) return generatorRef.current.getVoxel(x, y, z);
+        return 0;
+    };
+    for(let i=0; i<5; i++) {
+        const zombieChar = new Character();
+        zombieChar.setAppearance({ race: 'zombie', gender: 'm', face: 1, hair: 'none' });
+        
+        const startX = 16 + (Math.random() - 0.5) * 10;
+        const startZ = 16 + (Math.random() - 0.5) * 10;
+        const startY = 80 + Math.random() * 5;
+        
+        const npc = new NPCController(zombieChar, getVoxel, {x: startX, y: startY, z: startZ});
+        state.scene.add(zombieChar.group);
+        state.npcs.push(npc);
+    }
   };
 
   const toggleWireframe = useCallback(() => {

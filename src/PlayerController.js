@@ -10,10 +10,12 @@ import * as THREE from 'three';
 // ────────────────────────────────────────────────────────────────────────────────
 
 export class PlayerController {
-  constructor(character, camera, getGroundHeight) {
+  constructor(character, camera, getGroundHeight, getVoxel, getNPCs) {
     this.character = character;
     this.camera = camera;
     this.getGroundHeight = getGroundHeight;
+    this.getVoxel = getVoxel;
+    this.getNPCs = getNPCs; // Function that returns array of NPCControllers
 
     // World position — start well above ground so it falls naturally
     this.pos = new THREE.Vector3(16, 80, 16);
@@ -26,6 +28,14 @@ export class PlayerController {
     // State
     this.isGrounded = false;
     this.keys = {};
+    
+    // Dash State
+    this.isDashing = false;
+    this.dashTimer = 0;
+    this.DASH_DURATION = 0.4;
+    this.DASH_COOLDOWN = 1.0;
+    this.DASH_FORCE = 30.0;
+    this.dashCooldownTimer = 0;
 
     // ── Movement params ──────────────────────────────────────────────────────
     this.WALK_SPEED  = 6.0;
@@ -53,8 +63,25 @@ export class PlayerController {
     this._onKeyUp = (e) => {
       this.keys[e.code] = false;
     };
+    
+    this._onMouseDown = (e) => {
+      // Left click (0) for Attack
+      if (e.button === 0) {
+          this.keys['MouseLeft'] = true;
+          this.attackIntent = true;
+      }
+      // Right click (2) for Dash
+      if (e.button === 2) this.keys['MouseRight'] = true;
+    };
+    this._onMouseUp = (e) => {
+      if (e.button === 0) this.keys['MouseLeft'] = false;
+      if (e.button === 2) this.keys['MouseRight'] = false;
+    };
+
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup',   this._onKeyUp);
+    window.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup',   this._onMouseUp);
 
     // ── Mouse look & zoom ────────────────────────────────────────────────────
     this.onMouseMove = (dx, dy) => {
@@ -74,6 +101,8 @@ export class PlayerController {
   cleanup() {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup',   this._onKeyUp);
+    window.removeEventListener('mousedown', this._onMouseDown);
+    window.removeEventListener('mouseup',   this._onMouseUp);
     window.removeEventListener('wheel',   this._onWheel);
   }
 
@@ -97,11 +126,77 @@ export class PlayerController {
 
     const isMoving = wish.lengthSq() > 0;
     if (isMoving) wish.normalize();
+    
+    // ── Dash Logic ───────────────────────────────────────────────────────────
+    if (this.dashCooldownTimer > 0) this.dashCooldownTimer -= delta;
+    
+    if (this.isDashing) {
+      this.dashTimer -= delta;
+      if (this.dashTimer <= 0) {
+        this.isDashing = false;
+      }
+    } else if ((this.keys['KeyQ'] || this.keys['MouseRight']) && this.dashCooldownTimer <= 0 && this.isGrounded) {
+      this.isDashing = true;
+      this.dashTimer = this.DASH_DURATION;
+      this.dashCooldownTimer = this.DASH_COOLDOWN;
+      
+      // Dash in the direction of movement, or facing direction if still
+      let dashDir = isMoving ? wish.clone() : fwd.clone();
+      this.vel.x = dashDir.x * this.DASH_FORCE;
+      this.vel.z = dashDir.z * this.DASH_FORCE;
+    }
+
+    // ── Combat Logic ─────────────────────────────────────────────────────────
+    if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= delta;
+
+    if (this.isAttacking) {
+        this.attackTimer -= delta;
+        const progress = 1.0 - (this.attackTimer / this.ATTACK_DURATION);
+        
+        // Active swing frames (between 20% and 50% of the animation)
+        if (progress > 0.2 && progress < 0.5 && !this.hasDealtDamage && this.getNPCs) {
+            const hitRadius = 2.5;
+            const npcs = this.getNPCs();
+            const attackPoint = this.pos.clone().add(fwd.clone().multiplyScalar(1.5));
+            
+            for (const npc of npcs) {
+                if (npc.hp > 0 && npc.pos.distanceTo(attackPoint) < hitRadius) {
+                    npc.takeDamage(25);
+                    this.hasDealtDamage = true; // One hit per swing max, or we can make it AoE
+                    // If we want to hit multiple targets in a cone, we don't break, just set flag
+                    // But we should track which NPCs were hit this swing. For now, hit all in range!
+                }
+            }
+            if (npcs.some(n => n.hp > 0 && n.pos.distanceTo(attackPoint) < hitRadius)) {
+                this.hasDealtDamage = true;
+            }
+        }
+        
+        if (this.attackTimer <= 0) {
+            this.isAttacking = false;
+        }
+    } else if ((this.keys['MouseLeft'] || this.attackIntent) && this.attackCooldownTimer <= 0 && this.isGrounded && !this.isDashing) {
+        this.isAttacking = true;
+        this.attackIntent = false;
+        this.attackTimer = this.ATTACK_DURATION;
+        this.attackCooldownTimer = this.ATTACK_COOLDOWN;
+        this.hasDealtDamage = false;
+        
+        // Face the camera direction when attacking
+        const targetYaw = Math.atan2(-fwd.x, -fwd.z);
+        const wrappedDiff = ((targetYaw - this.character.group.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
+        this.character.group.rotation.y += wrappedDiff; 
+    }
 
     // ── 2. Apply acceleration / deceleration on XZ ───────────────────────────
     const accelFactor = this.isGrounded ? 1.0 : this.AIR_CONTROL;
 
-    if (isMoving) {
+    if (this.isDashing) {
+       // While dashing, don't allow standard movement to override velocity quickly
+       // Just let friction slow us down slightly
+       this.vel.x *= Math.max(0, 1.0 - this.DECEL * 0.1 * delta);
+       this.vel.z *= Math.max(0, 1.0 - this.DECEL * 0.1 * delta);
+    } else if (isMoving) {
       // Accelerate toward wish direction
       const accel = this.ACCEL * accelFactor * delta;
       const desired = wish.clone().multiplyScalar(targetSpeed);
@@ -124,20 +219,86 @@ export class PlayerController {
     // ── 3. Gravity ───────────────────────────────────────────────────────────
     this.vel.y -= this.GRAVITY * delta;
 
-    // ── 4. Integrate position ─────────────────────────────────────────────────
-    this.pos.x += this.vel.x * delta;
-    this.pos.y += this.vel.y * delta;
-    this.pos.z += this.vel.z * delta;
+    // ── 4. Exact Voxel AABB Collision ────────────────────────────────────────
+    
+    // Helper to check AABB overlap
+    const checkCollision = (x, y, z) => {
+      if (!this.getVoxel) return false;
+      const w = 0.35; // half-width
+      const h = 2.0;  // height
+      const minX = Math.floor(x - w);
+      const maxX = Math.floor(x + w);
+      const minY = Math.floor(y);
+      const maxY = Math.floor(y + h);
+      const minZ = Math.floor(z - w);
+      const maxZ = Math.floor(z + w);
+      
+      for (let bx = minX; bx <= maxX; bx++) {
+        for (let by = minY; by <= maxY; by++) {
+          for (let bz = minZ; bz <= maxZ; bz++) {
+            if (this.getVoxel(bx, by, bz) > 0) return true;
+          }
+        }
+      }
+      return false;
+    };
 
-    // ── 5. Ground collision ───────────────────────────────────────────────────
-    const groundY = this.getGroundHeight(this.pos.x, this.pos.z);
+    // Step X
+    if (this.vel.x !== 0) {
+      const nextX = this.pos.x + this.vel.x * delta;
+      if (checkCollision(nextX, this.pos.y, this.pos.z)) {
+        // Try stepping up (Auto-step up to 1.1 blocks)
+        if (!checkCollision(nextX, this.pos.y + 1.1, this.pos.z)) {
+          this.pos.x = nextX;
+          this.pos.y += 1.1; // step up
+        } else {
+          this.vel.x = 0; // blocked
+        }
+      } else {
+        this.pos.x = nextX;
+      }
+    }
 
-    if (this.pos.y <= groundY) {
-      this.pos.y = groundY;
-      if (this.vel.y < 0) this.vel.y = 0;
-      this.isGrounded = true;
+    // Step Z
+    if (this.vel.z !== 0) {
+      const nextZ = this.pos.z + this.vel.z * delta;
+      if (checkCollision(this.pos.x, this.pos.y, nextZ)) {
+         // Try stepping up
+         if (!checkCollision(this.pos.x, this.pos.y + 1.1, nextZ)) {
+           this.pos.z = nextZ;
+           this.pos.y += 1.1;
+         } else {
+           this.vel.z = 0; // blocked
+         }
+      } else {
+        this.pos.z = nextZ;
+      }
+    }
+
+    // Step Y (Gravity / Jump)
+    if (this.vel.y !== 0) {
+      const nextY = this.pos.y + this.vel.y * delta;
+      if (checkCollision(this.pos.x, nextY, this.pos.z)) {
+        if (this.vel.y < 0) {
+          // Landed on ground
+          this.pos.y = Math.floor(nextY) + 1.0; 
+          this.vel.y = 0;
+          this.isGrounded = true;
+        } else {
+          // Hit ceiling
+          this.vel.y = 0;
+        }
+      } else {
+        this.pos.y = nextY;
+        this.isGrounded = false;
+      }
     } else {
-      this.isGrounded = false;
+       // Check if ground fell away from under us
+       if (!checkCollision(this.pos.x, this.pos.y - 0.1, this.pos.z)) {
+           this.isGrounded = false;
+       } else {
+           this.isGrounded = true;
+       }
     }
 
     // ── 6. Jump ───────────────────────────────────────────────────────────────
@@ -164,7 +325,15 @@ export class PlayerController {
 
     // ── 8. Animate limbs ─────────────────────────────────────────────────────
     const normSpeed = Math.min(horizSpeed / this.RUN_SPEED, 1.0);
-    this.character.updateAnimation(normSpeed, delta);
+    this.character.updateAnimation({
+      speed: normSpeed,
+      isGrounded: this.isGrounded,
+      isDashing: this.isDashing,
+      dashProgress: 1.0 - (this.dashTimer / this.DASH_DURATION),
+      isAttacking: this.isAttacking,
+      attackProgress: 1.0 - (this.attackTimer / this.ATTACK_DURATION),
+      fallSpeed: this.vel.y
+    }, delta);
 
     // ── 9. Place character mesh in world ─────────────────────────────────────
     this.character.group.position.copy(this.pos);
